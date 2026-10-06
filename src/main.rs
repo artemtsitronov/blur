@@ -6,16 +6,13 @@ mod select_modes;
 
 use helpers::{Highlighter, Tab, Visual, fg_color};
 use normal_mode::normal_mode;
-use ratatui::layout::Alignment;
+use ratatui::layout::{Alignment, Constraint, Layout};
 use ratatui::style::*;
-use ratatui::symbols::border;
 use ratatui::text::*;
-use ratatui::widgets::Borders;
+use ratatui::widgets::{Borders, Paragraph};
 use ratatui::*;
 use select_modes::{select_mode_line, select_mode1};
 use unicode_width::UnicodeWidthStr;
-
-use crate::helpers::log;
 
 fn main() -> std::io::Result<()> {
     ratatui::run(app)?;
@@ -208,8 +205,17 @@ fn renderer(
     let block = ratatui::widgets::Block::default()
         .borders(Borders::TOP | Borders::BOTTOM)
         .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(theme.color("accent.secondary").into()));
-    let inner = block.inner(areas[1]);
+        .border_style(
+            Style::default()
+                .fg(theme.color("accent.secondary").into())
+                .bg(theme.color("bg.base").into()),
+        );
+    let main_area = block.inner(areas[1]);
+
+    let digits = tab.input_box.len().to_string().len();
+    let [gutter_area, inner] =
+        Layout::horizontal([Constraint::Length(digits as u16 + 2), Constraint::Min(0)])
+            .areas(main_area);
 
     let footer_text: String;
     let footer_chunks =
@@ -283,6 +289,18 @@ fn renderer(
             }
         }
     );
+    let numbers: Vec<Line> = (0..tab.input_box.len())
+        .skip(tab.scroll_y as usize)
+        .take(inner.height as usize)
+        .map(|x| {
+            let style = if x == tab.cursor_y as usize {
+                Style::default().fg(theme.color("accent.primary").into())
+            } else {
+                Style::default().fg(theme.color("text.muted").into())
+            };
+            Line::styled(format!(" {:>digits$} ", x + 1), style)
+        })
+        .collect();
     let footer_left = Line::from(vec![
         Span::styled(
             footer_text.clone(),
@@ -327,8 +345,7 @@ fn renderer(
     let input =
         ratatui::widgets::Paragraph::new(ratatui::text::Text::from(highlighter.highlight(tab)))
             .scroll((tab.scroll_y, tab.scroll_x))
-            .bg(theme.color("bg.base"))
-            .block(block);
+            .bg(theme.color("bg.base"));
     let tabs = ratatui::widgets::Tabs::new(tab_names.clone())
         .select(*tab_selector)
         .divider(ratatui::symbols::DOT)
@@ -345,7 +362,12 @@ fn renderer(
         .padding(" ", " ");
 
     frame.render_widget(tabs, areas[0]);
-    frame.render_widget(input, areas[1]);
+    frame.render_widget(block, areas[1]);
+    frame.render_widget(
+        Paragraph::new(numbers).bg(theme.color("bg.base")),
+        gutter_area,
+    );
+    frame.render_widget(input, inner);
     frame.render_widget(
         ratatui::widgets::Paragraph::new(footer_left)
             .alignment(Alignment::Left)
