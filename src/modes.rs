@@ -1,7 +1,6 @@
 use crate::controls::default_controls;
 use crate::helpers::{EditRecord, Tab};
 
-
 pub fn insert_mode(
     tab: &mut Tab,
     event_key: crossterm::event::KeyEvent,
@@ -169,7 +168,8 @@ pub fn insert_paste(tab: &mut Tab, text: &str) {
 }
 
 pub fn open_mode(
-    tab: &mut Tab,
+    tabs: &mut Vec<Tab>,
+    tab_selector: &mut usize,
     event_key: crossterm::event::KeyEvent,
     the_command_line: &mut String,
     mode: &mut i32,
@@ -182,22 +182,29 @@ pub fn open_mode(
             the_command_line.pop();
         }
         crossterm::event::KeyCode::Enter => {
-            match std::fs::read_to_string(&the_command_line) {
+            let path = the_command_line.clone();
+            let mut new_tab = Tab::new();
+
+            match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    tab.undo_stack.clear();
-                    tab.redo_stack.clear();
-                    tab.input_box = content.clone().split('\n').map(|s| s.to_string()).collect();
-                    tab.saved = true;
-                    tab.highlight_cache = None;
+                    new_tab.undo_stack.clear();
+                    new_tab.redo_stack.clear();
+                    new_tab.input_box =
+                        content.clone().split('\n').map(|s| s.to_string()).collect();
+                    new_tab.saved = true;
+                    new_tab.highlight_cache = None;
                 }
                 Err(_) => {
-                    tab.input_box = vec![String::new()];
-                    tab.unsave();
+                    new_tab.input_box = vec![String::new()];
+                    new_tab.unsave();
                 }
             }
-            tab.cursor_x = 0;
-            tab.cursor_y = 0;
-            tab.file_name = the_command_line.clone();
+            new_tab.cursor_x = 0;
+            new_tab.cursor_y = 0;
+            new_tab.file_name = the_command_line.clone();
+
+            tabs.push(new_tab);
+            *tab_selector = tabs.len() - 1;
             the_command_line.clear();
             *mode = 0;
         }

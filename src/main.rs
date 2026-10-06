@@ -5,14 +5,17 @@ mod normal_mode;
 mod select_modes;
 
 use helpers::{Highlighter, Tab, Visual, fg_color};
+use normal_mode::normal_mode;
 use ratatui::layout::Alignment;
 use ratatui::style::*;
+use ratatui::symbols::border;
 use ratatui::text::*;
+use ratatui::widgets::Borders;
 use ratatui::*;
+use select_modes::{select_mode_line, select_mode1};
 use unicode_width::UnicodeWidthStr;
-use normal_mode::normal_mode;
-use select_modes::{select_mode1, select_mode_line};
 
+use crate::helpers::log;
 
 fn main() -> std::io::Result<()> {
     ratatui::run(app)?;
@@ -47,11 +50,23 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         },
     }
     loop {
+        let tab_names = &tabs
+            .iter()
+            .map(|x| {
+                if x.file_name.is_empty() {
+                    "untitled".to_string()
+                } else {
+                    x.file_name.clone()
+                }
+            })
+            .collect();
+
         let mut tab = &mut tabs[tab_selector];
         terminal.draw(|frame| {
             renderer(
                 frame,
                 &theme,
+                tab_names,
                 &tab_selector,
                 &mut tab,
                 &highlighter,
@@ -83,41 +98,42 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                         )
                         .unwrap()
                         {
-                            if tabs.len() > 1
-                            {
+                            if tabs.len() > 1 {
                                 tabs.remove(tab_selector);
-                                if tab_selector > tabs.len()
-                                {
+                                if tab_selector > tabs.len() {
                                     crate::helpers::log(&format!("{}", tab_selector));
                                     tab_selector -= 1;
                                 }
                                 mode = 0;
-                            }
-                            else {
+                            } else {
                                 break;
                             }
                         }
                     }
                     1 => {
                         /////////////////////// INSERT MODE /////////////////////////
-                        if !modes::insert_mode(&mut tab, *event_key, &mut mode, &mut the_text, &mut filled_now)
-                            .unwrap()
+                        if !modes::insert_mode(
+                            &mut tab,
+                            *event_key,
+                            &mut mode,
+                            &mut the_text,
+                            &mut filled_now,
+                        )
+                        .unwrap()
                         {
                             continue;
                         }
                     }
                     2 => {
                         //////////////////////// SELECT MODE ////////////////////////////////////
-                        if !select_mode1(&mut tab, &mut vis, *event_key, &mut mode).unwrap()
-                        {
+                        if !select_mode1(&mut tab, &mut vis, *event_key, &mut mode).unwrap() {
                             mode = 0;
                             continue;
                         }
                     }
                     3 => {
                         //////////////////////// SELECT-LINE MODE ////////////////////////////////////
-                        if !select_mode_line(&mut tab, &mut vis, *event_key, &mut mode).unwrap()
-                        {
+                        if !select_mode_line(&mut tab, &mut vis, *event_key, &mut mode).unwrap() {
                             mode = 0;
                             continue;
                         }
@@ -131,8 +147,14 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                         }
                     }
                     11 => {
-                        if !modes::open_mode(&mut tab, *event_key, &mut the_command_line, &mut mode)
-                            .unwrap()
+                        if !modes::open_mode(
+                            &mut tabs,
+                            &mut tab_selector,
+                            *event_key,
+                            &mut the_command_line,
+                            &mut mode,
+                        )
+                        .unwrap()
                         {
                             mode = 401;
                         }
@@ -140,16 +162,13 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                     ////////////////////// UNSAVED WORK MODE ////////////////////////////////
                     403 => {
                         if !modes::unsaved_work_mode(*event_key, &mut mode).unwrap() {
-                            if tabs.len() > 1
-                            {
+                            if tabs.len() > 1 {
                                 tabs.remove(tab_selector);
-                                if tab_selector >= tabs.len()
-                                {
+                                if tab_selector >= tabs.len() {
                                     tab_selector -= 1;
                                 }
                                 mode = 0;
-                            }
-                            else {
+                            } else {
                                 break;
                             }
                         }
@@ -172,6 +191,7 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 fn renderer(
     frame: &mut Frame,
     theme: &opaline::Theme,
+    tab_names: &Vec<String>,
     tab_selector: &usize,
     tab: &mut Tab,
     highlighter: &Highlighter,
@@ -179,15 +199,22 @@ fn renderer(
     the_command_line: &str,
 ) {
     let areas = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Min(0),
         ratatui::layout::Constraint::Length(1),
     ])
     .split(frame.area());
 
+    let block = ratatui::widgets::Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(theme.color("accent.secondary").into()));
+    let inner = block.inner(areas[1]);
+
     let footer_text: String;
     let footer_chunks =
         ratatui::layout::Layout::horizontal([ratatui::layout::Constraint::Percentage(50); 2])
-            .split(areas[1]);
+            .split(areas[2]);
 
     match mode {
         0 => {
@@ -223,8 +250,8 @@ fn renderer(
 
     if tab.cursor_y as u16 <= tab.scroll_y {
         tab.scroll_y = tab.cursor_y as u16;
-    } else if tab.cursor_y as u16 >= tab.scroll_y + areas[0].height {
-        tab.scroll_y = tab.cursor_y as u16 - areas[0].height + 1;
+    } else if tab.cursor_y as u16 >= tab.scroll_y + inner.height {
+        tab.scroll_y = tab.cursor_y as u16 - inner.height + 1;
     }
 
     let empty = String::new();
@@ -240,8 +267,8 @@ fn renderer(
 
     if visual_x <= tab.scroll_x {
         tab.scroll_x = visual_x;
-    } else if visual_x >= tab.scroll_x + areas[0].width {
-        tab.scroll_x = visual_x - areas[0].width + 1;
+    } else if visual_x >= tab.scroll_x + inner.width {
+        tab.scroll_x = visual_x - inner.width + 1;
     }
 
     let footer_file_name = format!(
@@ -283,7 +310,7 @@ fn renderer(
         ),
     ]);
     let footer_right = Line::from(vec![
-        Span::raw(format!(" Row {}; Col {} ", visual_x, tab.cursor_y)),
+        Span::raw(format!(" Row {}; Col {} ", tab.cursor_y, visual_x)),
         Span::styled(
             "\u{e0b2}",
             Style::default().fg(theme.color("accent.primary").into()),
@@ -299,8 +326,26 @@ fn renderer(
 
     let input =
         ratatui::widgets::Paragraph::new(ratatui::text::Text::from(highlighter.highlight(tab)))
-            .scroll((tab.scroll_y, tab.scroll_x));
-    frame.render_widget(input, areas[0]);
+            .scroll((tab.scroll_y, tab.scroll_x))
+            .bg(theme.color("bg.base"))
+            .block(block);
+    let tabs = ratatui::widgets::Tabs::new(tab_names.clone())
+        .select(*tab_selector)
+        .divider(ratatui::symbols::DOT)
+        .style(
+            Style::default()
+                .bg(theme.color("bg.base").into())
+                .fg(theme.color("text.primary").into()),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(theme.color("accent.primary").into())
+                .fg(fg_color(theme.color("accent.primary"))),
+        )
+        .padding(" ", " ");
+
+    frame.render_widget(tabs, areas[0]);
+    frame.render_widget(input, areas[1]);
     frame.render_widget(
         ratatui::widgets::Paragraph::new(footer_left)
             .alignment(Alignment::Left)
@@ -315,8 +360,8 @@ fn renderer(
     );
 
     frame.set_cursor_position((
-        areas[0].x + visual_x.saturating_sub(tab.scroll_x),
-        areas[0].y + (tab.cursor_y as u16).saturating_sub(tab.scroll_y),
+        inner.x + visual_x.saturating_sub(tab.scroll_x),
+        inner.y + (tab.cursor_y as u16).saturating_sub(tab.scroll_y),
     ));
     if mode == 10 || mode == 11 {
         let prefix = if mode == 10 {
@@ -325,6 +370,6 @@ fn renderer(
             " File to Open: "
         };
         let cursor_col = prefix.chars().count() + the_command_line.chars().count();
-        frame.set_cursor_position((areas[1].x + cursor_col as u16, areas[1].y));
+        frame.set_cursor_position((areas[2].x + cursor_col as u16, areas[2].y));
     }
 }
