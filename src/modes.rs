@@ -1,166 +1,25 @@
-use crate::controls::{controls, default_controls};
-use crate::helpers::{EditRecord, Tab, apply_forward, apply_inverse};
-
-pub fn normal_mode(
-    tab: &mut Tab,
-    event_key: crossterm::event::KeyEvent,
-    mode: &mut i32,
-    the_command_line: &mut String,
-    text: &mut Vec<String>,
-) -> std::io::Result<bool> {
-    if controls(event_key, &mut tab.cursor_y, &mut tab.cursor_x, text).unwrap() {
-        return Ok(true);
-    }
-    match event_key.code {
-        crossterm::event::KeyCode::Char('a') => {
-            if (tab.cursor_x as usize) < text[tab.cursor_y as usize].len() {
-                tab.cursor_x += 1;
-            }
-            *mode = 1;
-        }
-        crossterm::event::KeyCode::Char('i') => {
-            *mode = 1;
-        }
-        crossterm::event::KeyCode::Char('e') => {
-            let start = tab.cursor_x as usize;
-            let new_x = match text[tab.cursor_y as usize][start..].find(' ') {
-                Some(rel) => start + rel + 1,
-                None => text[tab.cursor_y as usize].len(),
-            } as i32;
-
-            tab.cursor_x = new_x;
-        }
-        crossterm::event::KeyCode::Char('b') => {
-            let start = tab.cursor_x as usize;
-            let before = &text[tab.cursor_y as usize][..start];
-            let new_x = match before.rfind(' ') {
-                Some(rel) => rel,
-                None => 0,
-            } as i32;
-
-            tab.cursor_x = new_x;
-        }
-        crossterm::event::KeyCode::Char('o') => {
-            tab.saved = false;
-            tab.input_box
-                .insert(tab.cursor_y as usize + 1, String::new());
-            tab.undo_stack.push(EditRecord::InsertLine {
-                row: tab.cursor_y as usize + 1,
-            });
-            tab.redo_stack.clear();
-            tab.cursor_y += 1;
-            tab.cursor_x = 0;
-            *mode = 1;
-        }
-        crossterm::event::KeyCode::Char('q') => {
-            if !tab.saved {
-                *mode = 403;
-            } else {
-                return Ok(false);
-            }
-        }
-        crossterm::event::KeyCode::Char('w') => {
-            if tab.file_name.len() > 0 {
-                match std::fs::write(&tab.file_name, &tab.input_box.join("\n")) {
-                    Ok(_) => {
-                        tab.saved = true;
-                    }
-                    Err(_) => {
-                        *mode = 402;
-                    }
-                }
-                *mode = 0;
-                the_command_line.clear();
-                return Ok(true);
-            }
-            *mode = 10;
-        }
-        crossterm::event::KeyCode::Char('W') => {
-            *mode = 10;
-        }
-        crossterm::event::KeyCode::Char('O') => {
-            *mode = 11;
-        }
-        crossterm::event::KeyCode::Delete => {
-            let x = tab.cursor_x as usize;
-            let y = tab.cursor_y as usize;
-            tab.saved = false;
-            if tab.input_box[y].is_empty() && tab.input_box.len() > 1 {
-                tab.input_box.remove(y);
-                tab.cursor_x = 0;
-                tab.undo_stack.push(EditRecord::RemoveEmptyLine { row: y });
-                tab.redo_stack.clear();
-            } else if x < tab.input_box[y].len() {
-                let ch = tab.input_box[y].remove(x);
-                tab.undo_stack
-                    .push(EditRecord::DeleteChar { row: y, col: x, ch });
-                tab.redo_stack.clear();
-            }
-        }
-        crossterm::event::KeyCode::Backspace => {
-            let y = tab.cursor_y as usize;
-            tab.saved = false;
-            if tab.input_box[y].is_empty() && y > 0 {
-                tab.input_box.remove(y);
-                tab.undo_stack.push(EditRecord::RemoveEmptyLine { row: y });
-                tab.cursor_y -= 1;
-                tab.redo_stack.clear();
-                tab.cursor_x = text[tab.cursor_y as usize].len() as i32;
-                return Ok(true);
-            } else if tab.cursor_x > 0 {
-                let x = tab.cursor_x as usize;
-                if let Some((prev_idx, ch)) = tab.input_box[y][..x].char_indices().next_back() {
-                    tab.input_box[y].remove(prev_idx);
-                    tab.undo_stack.push(EditRecord::DeleteChar {
-                        row: y,
-                        col: prev_idx,
-                        ch,
-                    });
-                    tab.cursor_x -= ch.len_utf8() as i32;
-                    tab.redo_stack.clear();
-                }
-            } else {
-                if y > 0 {
-                    let current = tab.input_box.remove(y);
-                    let prev_line = &mut tab.input_box[y - 1];
-                    tab.cursor_y -= 1;
-                    tab.cursor_x = prev_line.len() as i32;
-                    prev_line.push_str(&current);
-                    tab.undo_stack.push(EditRecord::MergeLine {
-                        row: y - 1,
-                        prev_len: tab.cursor_x as usize,
-                    });
-                    tab.redo_stack.clear();
-                }
-            }
-        }
-        crossterm::event::KeyCode::Char('z') => {
-            if let Some(record) = tab.undo_stack.pop() {
-                let (row, col) = apply_inverse(&record, &mut tab.input_box);
-                tab.cursor_y = row as i32;
-                tab.cursor_x = col as i32;
-                tab.redo_stack.push(record);
-            }
-        }
-        crossterm::event::KeyCode::Char('r') => {
-            if let Some(record) = tab.redo_stack.pop() {
-                let (row, col) = apply_forward(&record, &mut tab.input_box);
-                tab.cursor_y = row as i32;
-                tab.cursor_x = col as i32;
-                tab.undo_stack.push(record);
-            }
-        }
-        _ => {}
-    }
-    Ok(true)
-}
+use crate::controls::default_controls;
+use crate::helpers::{EditRecord, Tab};
 
 pub fn insert_mode(
     tab: &mut Tab,
     event_key: crossterm::event::KeyEvent,
     mode: &mut i32,
     text: &mut Vec<String>,
+    filled_now: &mut String,
 ) -> std::io::Result<bool> {
+    if !matches!(event_key.code, crossterm::event::KeyCode::Char(_)) {
+        if !filled_now.is_empty() {
+            let col = tab.cursor_x as usize - filled_now.len();
+            tab.undo_stack.push(EditRecord::InsertString {
+                row: tab.cursor_y as usize,
+                col,
+                text: filled_now.clone(),
+            });
+            tab.redo_stack.clear();
+        }
+        filled_now.clear();
+    }
     if default_controls(event_key, &mut tab.cursor_y, &mut tab.cursor_x, text)? {
         return Ok(true);
     }
@@ -172,12 +31,11 @@ pub fn insert_mode(
 
         crossterm::event::KeyCode::Char(c) => {
             let blen = c.len_utf8() as i32;
-            tab.saved = false;
+            tab.unsave();
             let row = tab.cursor_y as usize;
             let col = tab.cursor_x as usize;
             tab.input_box[row].insert(col, c);
-            tab.undo_stack
-                .push(EditRecord::InsertChar { row, col, ch: c });
+            filled_now.push(c);
             tab.redo_stack.clear();
             tab.cursor_x += blen;
         }
@@ -186,6 +44,7 @@ pub fn insert_mode(
             let y = tab.cursor_y as usize;
             let x = tab.cursor_x as usize;
             let rest = tab.input_box[y].split_off(x);
+            tab.unsave();
             tab.input_box.insert(y + 1, rest);
             tab.undo_stack
                 .push(EditRecord::SplitLine { row: y, col: x });
@@ -194,7 +53,7 @@ pub fn insert_mode(
             tab.cursor_y += 1;
         }
         crossterm::event::KeyCode::Tab => {
-            tab.saved = false;
+            tab.unsave();
             let row = tab.cursor_y as usize;
             let col = tab.cursor_x as usize;
             tab.input_box[row].insert_str(col, "    ");
@@ -209,7 +68,7 @@ pub fn insert_mode(
         crossterm::event::KeyCode::Delete => {
             let x = tab.cursor_x as usize;
             let y = tab.cursor_y as usize;
-            tab.saved = false;
+            tab.unsave();
             if tab.input_box[y].is_empty() && tab.input_box.len() > 1 {
                 tab.input_box.remove(y);
                 tab.cursor_x = 0;
@@ -224,7 +83,7 @@ pub fn insert_mode(
         }
         crossterm::event::KeyCode::Backspace => {
             let y = tab.cursor_y as usize;
-            tab.saved = false;
+            tab.unsave();
             if tab.input_box[y].is_empty() && y > 0 {
                 tab.input_box.remove(y);
                 tab.undo_stack.push(EditRecord::RemoveEmptyLine { row: y });
@@ -273,10 +132,9 @@ pub fn unsaved_work_mode(
         crossterm::event::KeyCode::Char('y') => {
             return Ok(false);
         }
-        crossterm::event::KeyCode::Char('n') => {
+        _ => {
             *mode = 0;
         }
-        _ => {}
     }
     Ok(true)
 }
@@ -284,7 +142,7 @@ pub fn unsaved_work_mode(
 pub fn insert_paste(tab: &mut Tab, text: &str) {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
 
-    tab.saved = false;
+    tab.unsave();
 
     let y = tab.cursor_y as usize;
     let x = tab.cursor_x as usize;
@@ -311,7 +169,8 @@ pub fn insert_paste(tab: &mut Tab, text: &str) {
 }
 
 pub fn open_mode(
-    tab: &mut Tab,
+    tabs: &mut Vec<Tab>,
+    tab_selector: &mut usize,
     event_key: crossterm::event::KeyEvent,
     the_command_line: &mut String,
     mode: &mut i32,
@@ -324,17 +183,29 @@ pub fn open_mode(
             the_command_line.pop();
         }
         crossterm::event::KeyCode::Enter => {
-            match std::fs::read_to_string(&the_command_line) {
+            let path = the_command_line.clone();
+            let mut new_tab = Tab::new();
+
+            match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    tab.input_box = content.clone().split('\n').map(|s| s.to_string()).collect()
+                    new_tab.undo_stack.clear();
+                    new_tab.redo_stack.clear();
+                    new_tab.input_box =
+                        content.clone().split('\n').map(|s| s.to_string()).collect();
+                    new_tab.saved = true;
+                    new_tab.highlight_cache = None;
                 }
                 Err(_) => {
-                    tab.input_box = vec![String::new()];
+                    new_tab.input_box = vec![String::new()];
+                    new_tab.unsave();
                 }
             }
-            tab.cursor_x = 0;
-            tab.cursor_y = 0;
-            tab.file_name = the_command_line.clone();
+            new_tab.cursor_x = 0;
+            new_tab.cursor_y = 0;
+            new_tab.file_name = the_command_line.clone();
+
+            tabs.push(new_tab);
+            *tab_selector = tabs.len() - 1;
             the_command_line.clear();
             *mode = 0;
         }

@@ -1,11 +1,26 @@
+use crate::lsp::{self, Diag};
 use opaline::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
 };
 use syntect::parsing::SyntaxSet;
 
-use crate::lsp::{self, Diag};
+pub struct Visual {
+    pub v_x: usize,
+    pub v_y: usize,
+    pub on: bool,
+}
+
+impl Visual {
+    pub fn new() -> Self {
+        Visual {
+            v_x: 0,
+            v_y: 0,
+            on: false,
+        }
+    }
+}
 
 fn wcag_contrast(l1: f64, l2: f64) -> f64 {
     let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
@@ -49,18 +64,12 @@ impl Highlighter {
             diag_colors: diag_colors(theme),
         }
     }
-
-    pub fn highlight<'a>(&self, tab: &Tab, diags: &[Diag]) -> Vec<ratatui::text::Line<'a>> {
+    fn syntax_lines(&self, tab: &Tab) -> Vec<Line<'static>> {
         if tab.file_name.is_empty() {
             return tab
                 .input_box
                 .iter()
-                .map(|line| {
-                    ratatui::text::Line::from(ratatui::text::Span::styled(
-                        line.to_string(),
-                        ratatui::style::Style::default().fg(ratatui::style::Color::White),
-                    ))
-                })
+                .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(Color::White))))
                 .collect();
         }
         let syntax = self
@@ -69,29 +78,45 @@ impl Highlighter {
             .ok()
             .flatten()
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+        let mut h = syntect::easy::HighlightLines::new(syntax, &self.syntect_theme);
+        tab.input_box
+            .iter()
+            .map(|line| {
+                let spans: Vec<Span<'static>> = h
+                    .highlight_line(line, &self.syntax_set)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(st, text)| {
+                        Span::styled(
+                            text.trim_end_matches('\n').to_string(),
+                            Style::default().fg(Color::Rgb(
+                                st.foreground.r,
+                                st.foreground.g,
+                                st.foreground.b,
+                            )),
+                        )
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
+    }
 
-        let mut the_highlighter = syntect::easy::HighlightLines::new(syntax, &self.syntect_theme);
-        let mut spans: Vec<ratatui::text::Line> = Vec::new();
-
-        for (i, line) in tab.input_box.iter().enumerate() {
-            let range = the_highlighter
-                .highlight_line(line, &self.syntax_set)
-                .unwrap_or_default();
-            let mut spans_for_line: Vec<ratatui::text::Span> = Vec::new();
-            for (style, text) in range {
-                let fg = style.foreground;
-                let span = ratatui::text::Span::styled(
-                    text.trim_end_matches('\n').to_string(),
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Rgb(fg.r, fg.g, fg.b)),
-                );
-                spans_for_line.push(span);
-            }
-            let marks = marks_for_row(i as u32, line, diags);
-            let spans_for_line = overlay(spans_for_line, &marks, &self.diag_colors);
-            spans.push(ratatui::text::Line::from(spans_for_line));
+    pub fn highlight(&self, tab: &mut Tab, diags: &[Diag], height: usize) -> Vec<Line<'static>> {
+        if tab.highlight_cache.is_none() {
+            tab.highlight_cache = Some(self.syntax_lines(tab));
         }
-        return spans;
+        let base = tab.highlight_cache.as_ref().unwrap();
+        base.iter()
+            .enumerate()
+            .skip(tab.scroll_y as usize)
+            .take(height)
+            .map(|(i, line)| {
+                let text = tab.input_box.get(i).map_or("", |s| s.as_str());
+                let marks = marks_for_row(i as u32, text, diags);
+                Line::from(overlay(line.spans.clone(), &marks, &self.diag_colors))
+            })
+            .collect()
     }
 }
 
@@ -105,9 +130,11 @@ fn diag_colors(theme: &Theme) -> [ratatui::style::Color; 4] {
 }
 
 fn underline(sev: u8, colors: &[ratatui::style::Color; 4]) -> Style {
+    let c = colors[(sev.clamp(1, 4) - 1) as usize];
     Style::default()
+        .fg(c)
         .add_modifier(Modifier::UNDERLINED)
-        .underline_color(colors[(sev.clamp(1, 4) - 1) as usize])
+        .underline_color(c)
 }
 
 // aio lsp shtuff
@@ -180,6 +207,7 @@ pub fn overlay(
 pub struct Tab {
     pub file_name: String,
     pub saved: bool,
+    pub highlight_cache: Option<Vec<ratatui::text::Line<'static>>>,
     pub input_box: Vec<String>,
     pub cursor_x: i32,
     pub cursor_y: i32,
@@ -188,13 +216,16 @@ pub struct Tab {
     pub undo_stack: Vec<EditRecord>,
     pub redo_stack: Vec<EditRecord>,
     pub lsp_dirty: bool,
+    pub lsp_file: String,
+    pub lsp_sent: String,
 }
 
 impl Tab {
     pub fn new() -> Self {
         Self {
             file_name: String::from(""),
-            saved: true,
+            saved: false,
+            highlight_cache: None,
             input_box: vec![String::new()],
             cursor_x: 0,
             cursor_y: 0,
@@ -203,22 +234,30 @@ impl Tab {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             lsp_dirty: false,
+            lsp_file: String::new(),
+            lsp_sent: String::new(),
         }
+    }
+
+    pub fn unsave(&mut self) {
+        self.saved = false;
+        self.highlight_cache = None;
+        self.lsp_dirty = true;
     }
 }
 
 pub enum EditRecord {
-    InsertChar {
-        row: usize,
-        col: usize,
-        ch: char,
-    },
     DeleteChar {
         row: usize,
         col: usize,
         ch: char,
     },
     InsertString {
+        row: usize,
+        col: usize,
+        text: String,
+    },
+    RemoveString {
         row: usize,
         col: usize,
         text: String,
@@ -234,6 +273,10 @@ pub enum EditRecord {
     InsertLine {
         row: usize,
     },
+    RemoveLine {
+        row: usize,
+        content: String,
+    },
     RemoveEmptyLine {
         row: usize,
     },
@@ -241,19 +284,19 @@ pub enum EditRecord {
 
 pub fn apply_inverse(record: &EditRecord, input_box: &mut Vec<String>) -> (usize, usize) {
     match record {
-        EditRecord::InsertChar { row, col, .. } => {
-            input_box[*row].remove(*col);
-            (*row, *col)
-        }
-
         EditRecord::DeleteChar { row, col, ch } => {
             input_box[*row].insert(*col, *ch);
-            (*row, *col + 1)
+            (*row, *col + ch.len_utf8())
         }
 
         EditRecord::InsertString { row, col, text } => {
-            let end = col + text.chars().count();
+            let end = col + text.len();
             input_box[*row].replace_range(*col..end, "");
+            (*row, *col)
+        }
+
+        EditRecord::RemoveString { row, col, text } => {
+            input_box[*row].insert_str(*col, text);
             (*row, *col)
         }
 
@@ -270,10 +313,14 @@ pub fn apply_inverse(record: &EditRecord, input_box: &mut Vec<String>) -> (usize
         }
 
         EditRecord::InsertLine { row } => {
-            input_box.insert(*row, String::new());
+            input_box.remove(*row);
             (*row, 0)
         }
 
+        EditRecord::RemoveLine { row, content } => {
+            input_box.insert(*row, content.clone());
+            (*row, 0)
+        }
         EditRecord::RemoveEmptyLine { row } => {
             input_box.insert(*row, String::new());
             (*row, 0)
@@ -283,11 +330,6 @@ pub fn apply_inverse(record: &EditRecord, input_box: &mut Vec<String>) -> (usize
 
 pub fn apply_forward(record: &EditRecord, input_box: &mut Vec<String>) -> (usize, usize) {
     match record {
-        EditRecord::InsertChar { row, col, ch } => {
-            input_box[*row].insert(*col, *ch);
-            (*row, *col + ch.len_utf8())
-        }
-
         EditRecord::DeleteChar { row, col, .. } => {
             input_box[*row].remove(*col);
             (*row, *col)
@@ -296,6 +338,12 @@ pub fn apply_forward(record: &EditRecord, input_box: &mut Vec<String>) -> (usize
         EditRecord::InsertString { row, col, text } => {
             input_box[*row].insert_str(*col, text);
             (*row, *col + text.len())
+        }
+
+        EditRecord::RemoveString { row, col, text } => {
+            let end = col + text.len();
+            input_box[*row].replace_range(*col..end, "");
+            (*row, *col)
         }
 
         EditRecord::SplitLine { row, col } => {
@@ -312,6 +360,10 @@ pub fn apply_forward(record: &EditRecord, input_box: &mut Vec<String>) -> (usize
 
         EditRecord::InsertLine { row } => {
             input_box.insert(*row, String::new());
+            (*row, 0)
+        }
+        EditRecord::RemoveLine { row, .. } => {
+            input_box.remove(*row);
             (*row, 0)
         }
 

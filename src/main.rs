@@ -3,40 +3,47 @@ mod helpers;
 mod lsp;
 mod lsp_manager;
 mod modes;
+mod normal_mode;
+mod select_modes;
 
-use helpers::{Highlighter, Tab, fg_color};
-use lsp_manager::LspManager;
-use ratatui::layout::Alignment;
-use ratatui::style::*;
-use ratatui::text::*;
-use ratatui::*;
 use std::path::Path;
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
 
-use crate::lsp::Lsp;
+use helpers::{Highlighter, Tab, Visual, fg_color};
+use lsp_manager::LspManager;
+use normal_mode::normal_mode;
+use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::style::*;
+use ratatui::text::*;
+use ratatui::widgets::{Borders, Paragraph};
+use ratatui::*;
+use select_modes::{select_mode_line, select_mode1};
+use unicode_width::UnicodeWidthStr;
 
 fn main() -> std::io::Result<()> {
     ratatui::run(app)?;
     Ok(())
 }
 
-fn sync_lsp(lsp: &mut LspManager, tab: &Tab, lsp_file: &mut String, last_sent: &mut Vec<String>) {
+fn sync_lsp(lsp: &mut LspManager, tab: &mut Tab) {
     if tab.file_name.is_empty() {
         return;
     }
-    let path = Path::new(&tab.file_name);
-    if *lsp_file != tab.file_name {
-        if !path.exists() {
-            return; // new file
-        }
-        lsp.open(path, &tab.input_box.join("\n"));
-        *lsp_file = tab.file_name.clone();
-        *last_sent = tab.input_box.clone();
-    } else if *last_sent != tab.input_box {
-        lsp.change(path, &tab.input_box.join("\n"));
-        *last_sent = tab.input_box.clone();
+    if tab.lsp_file == tab.file_name && !tab.lsp_dirty {
+        return;
     }
+    let path = Path::new(&tab.file_name);
+    let text = tab.input_box.join("\n");
+    if tab.lsp_file != tab.file_name {
+        if !path.exists() {
+            return;
+        }
+        lsp.open(path, &text);
+        tab.lsp_file = tab.file_name.clone();
+    } else {
+        lsp.change(path, &text);
+    }
+    tab.lsp_dirty = false;
 }
 
 fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
@@ -44,35 +51,52 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let theme = opaline::load_by_name("catppuccin-mocha").unwrap();
 
+    let mut tabs = Vec::new();
+    let mut tab_selector: usize = 0;
     let mut lsp = LspManager::default();
-    let mut lsp_file = String::new();
-    let mut last_sent: Vec<String> = Vec::new();
 
-    let mut tab = Tab::new();
     let highlighter = Highlighter::new(&theme);
+    let mut vis = Visual::new();
     let mut mode = 0;
     let mut the_command_line = String::new();
+    let mut filled_now = String::new();
+    tabs.push(Tab::new());
     match args.len() {
         1 => {}
         _ => match std::fs::read_to_string(&args[1]) {
             Ok(content) => {
-                tab.input_box = content.split('\n').map(|line| line.to_string()).collect();
-                tab.file_name = args[1].clone();
+                tabs[0].input_box = content.split('\n').map(|line| line.to_string()).collect();
+                tabs[0].file_name = args[1].clone();
+                tabs[0].saved = true;
             }
             Err(_) => {
-                tab.input_box = vec![String::new()];
-                tab.file_name = args[1].clone();
+                tabs[0].input_box = vec![String::new()];
+                tabs[0].file_name = args[1].clone();
             }
         },
     }
     loop {
         lsp.poll();
-        sync_lsp(&mut lsp, &tab, &mut lsp_file, &mut last_sent);
+        sync_lsp(&mut lsp, &mut tabs[tab_selector]);
+        let tab_names = &tabs
+            .iter()
+            .map(|x| {
+                if x.file_name.is_empty() {
+                    "untitled".to_string()
+                } else {
+                    x.file_name.clone()
+                }
+            })
+            .collect();
+
+        let mut tab = &mut tabs[tab_selector];
 
         terminal.draw(|frame| {
             renderer(
                 frame,
                 &theme,
+                tab_names,
+                &tab_selector,
                 &mut tab,
                 &highlighter,
                 &lsp,
@@ -82,7 +106,7 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         })?;
 
         if !crossterm::event::poll(Duration::from_millis(200))? {
-            continue; // nothing was pressed :(
+            continue; // nothing pressed: aaaw :(
         }
         let event = crossterm::event::read()?;
         let mut the_text = tab.input_box.clone();
@@ -96,8 +120,10 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                 match mode {
                     0 => {
                         ////////////////////// NORMAL MODE ////////////////////////
-                        if !modes::normal_mode(
-                            &mut tab,
+                        if !normal_mode(
+                            &mut tabs,
+                            &mut tab_selector,
+                            &mut vis,
                             *event_key,
                             &mut mode,
                             &mut the_command_line,
@@ -105,14 +131,43 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                         )
                         .unwrap()
                         {
-                            break;
+                            if tabs.len() > 1 {
+                                tabs.remove(tab_selector);
+                                if tab_selector >= tabs.len() {
+                                    crate::helpers::log(&format!("{}", tab_selector));
+                                    tab_selector -= 1;
+                                }
+                                mode = 0;
+                            } else {
+                                break;
+                            }
                         }
                     }
                     1 => {
                         /////////////////////// INSERT MODE /////////////////////////
-                        if !modes::insert_mode(&mut tab, *event_key, &mut mode, &mut the_text)
-                            .unwrap()
+                        if !modes::insert_mode(
+                            &mut tab,
+                            *event_key,
+                            &mut mode,
+                            &mut the_text,
+                            &mut filled_now,
+                        )
+                        .unwrap()
                         {
+                            continue;
+                        }
+                    }
+                    2 => {
+                        //////////////////////// SELECT MODE ////////////////////////////////////
+                        if !select_mode1(&mut tab, &mut vis, *event_key, &mut mode).unwrap() {
+                            mode = 0;
+                            continue;
+                        }
+                    }
+                    3 => {
+                        //////////////////////// SELECT-LINE MODE ////////////////////////////////////
+                        if !select_mode_line(&mut tab, &mut vis, *event_key, &mut mode).unwrap() {
+                            mode = 0;
                             continue;
                         }
                     }
@@ -125,8 +180,14 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                         }
                     }
                     11 => {
-                        if !modes::open_mode(&mut tab, *event_key, &mut the_command_line, &mut mode)
-                            .unwrap()
+                        if !modes::open_mode(
+                            &mut tabs,
+                            &mut tab_selector,
+                            *event_key,
+                            &mut the_command_line,
+                            &mut mode,
+                        )
+                        .unwrap()
                         {
                             mode = 401;
                         }
@@ -134,7 +195,15 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
                     ////////////////////// UNSAVED WORK MODE ////////////////////////////////
                     403 => {
                         if !modes::unsaved_work_mode(*event_key, &mut mode).unwrap() {
-                            break;
+                            if tabs.len() > 1 {
+                                tabs.remove(tab_selector);
+                                if tab_selector >= tabs.len() {
+                                    tab_selector -= 1;
+                                }
+                                mode = 0;
+                            } else {
+                                break;
+                            }
                         }
                     }
                     _ => {
@@ -155,6 +224,8 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 fn renderer(
     frame: &mut Frame,
     theme: &opaline::Theme,
+    tab_names: &Vec<String>,
+    tab_selector: &usize,
     tab: &mut Tab,
     highlighter: &Highlighter,
     lsp: &LspManager,
@@ -162,15 +233,31 @@ fn renderer(
     the_command_line: &str,
 ) {
     let areas = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Min(0),
         ratatui::layout::Constraint::Length(1),
     ])
     .split(frame.area());
 
+    let block = ratatui::widgets::Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(
+            Style::default()
+                .fg(theme.color("accent.secondary").into())
+                .bg(theme.color("bg.base").into()),
+        );
+    let main_area = block.inner(areas[1]);
+
+    let digits = tab.input_box.len().to_string().len();
+    let [gutter_area, inner] =
+        Layout::horizontal([Constraint::Length(digits as u16 + 2), Constraint::Min(0)])
+            .areas(main_area);
+
     let footer_text: String;
     let footer_chunks =
         ratatui::layout::Layout::horizontal([ratatui::layout::Constraint::Percentage(50); 2])
-            .split(areas[1]);
+            .split(areas[2]);
 
     match mode {
         0 => {
@@ -178,6 +265,12 @@ fn renderer(
         }
         1 => {
             footer_text = format!(" INSERT ");
+        }
+        2 => {
+            footer_text = format!(" SELECT ");
+        }
+        3 => {
+            footer_text = format!(" SELECT-LINE ");
         }
         10 => {
             footer_text = format!(" Save file into: {} ", the_command_line);
@@ -200,8 +293,8 @@ fn renderer(
 
     if tab.cursor_y as u16 <= tab.scroll_y {
         tab.scroll_y = tab.cursor_y as u16;
-    } else if tab.cursor_y as u16 >= tab.scroll_y + areas[0].height {
-        tab.scroll_y = tab.cursor_y as u16 - areas[0].height + 1;
+    } else if tab.cursor_y as u16 >= tab.scroll_y + inner.height {
+        tab.scroll_y = tab.cursor_y as u16 - inner.height + 1;
     }
 
     let empty = String::new();
@@ -217,22 +310,34 @@ fn renderer(
 
     if visual_x <= tab.scroll_x {
         tab.scroll_x = visual_x;
-    } else if visual_x >= tab.scroll_x + areas[0].width {
-        tab.scroll_x = visual_x - areas[0].width + 1;
+    } else if visual_x >= tab.scroll_x + inner.width {
+        tab.scroll_x = visual_x - inner.width + 1;
     }
 
     let footer_file_name = format!(
         " {} ",
         if tab.file_name.is_empty() {
-            "[Empty File]*".to_string()
+            format!("[Empty File]* | {}", tab_selector)
         } else {
             if tab.saved {
-                tab.file_name.clone()
+                format!("{} | {}", tab.file_name.clone(), tab_selector)
             } else {
-                format!("*{}", tab.file_name.clone())
+                format!("*{} | {}", tab.file_name.clone(), tab_selector)
             }
         }
     );
+    let numbers: Vec<Line> = (0..tab.input_box.len())
+        .skip(tab.scroll_y as usize)
+        .take(inner.height as usize)
+        .map(|x| {
+            let style = if x == tab.cursor_y as usize {
+                Style::default().fg(theme.color("accent.primary").into())
+            } else {
+                Style::default().fg(theme.color("text.muted").into())
+            };
+            Line::styled(format!(" {:>digits$} ", x + 1), style)
+        })
+        .collect();
     let footer_left = Line::from(vec![
         Span::styled(
             footer_text.clone(),
@@ -260,13 +365,13 @@ fn renderer(
         ),
     ]);
     let footer_right = Line::from(vec![
-        Span::raw(format!(" Row {}; Col {} ", visual_x, tab.cursor_y)),
+        Span::raw(format!(" Row {}; Col {} ", tab.cursor_y, visual_x)),
         Span::styled(
             "\u{e0b2}",
             Style::default().fg(theme.color("accent.primary").into()),
         ),
         Span::styled(
-            " Blur 0.1.1 ",
+            " Blur 1.2 ",
             Style::default()
                 .fg(fg_color(theme.color("accent.primary")))
                 .bg(theme.color("accent.primary").into())
@@ -275,11 +380,36 @@ fn renderer(
     ]);
 
     let diags = lsp.diagnostics(Path::new(&tab.file_name));
-    let input = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(
-        highlighter.highlight(tab, diags),
-    ))
-    .scroll((tab.scroll_y, tab.scroll_x));
-    frame.render_widget(input, areas[0]);
+    let input = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(highlighter.highlight(
+        tab,
+        diags,
+        inner.height as usize,
+    )))
+    .scroll((0, tab.scroll_x))
+    .bg(theme.color("bg.base"));
+
+    let tabs = ratatui::widgets::Tabs::new(tab_names.clone())
+        .select(*tab_selector)
+        .divider(ratatui::symbols::DOT)
+        .style(
+            Style::default()
+                .bg(theme.color("bg.base").into())
+                .fg(theme.color("text.primary").into()),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(theme.color("accent.primary").into())
+                .fg(fg_color(theme.color("accent.primary"))),
+        )
+        .padding(" ", " ");
+
+    frame.render_widget(tabs, areas[0]);
+    frame.render_widget(block, areas[1]);
+    frame.render_widget(
+        Paragraph::new(numbers).bg(theme.color("bg.base")),
+        gutter_area,
+    );
+    frame.render_widget(input, inner);
     frame.render_widget(
         ratatui::widgets::Paragraph::new(footer_left)
             .alignment(Alignment::Left)
@@ -294,8 +424,8 @@ fn renderer(
     );
 
     frame.set_cursor_position((
-        areas[0].x + visual_x.saturating_sub(tab.scroll_x),
-        areas[0].y + (tab.cursor_y as u16).saturating_sub(tab.scroll_y),
+        inner.x + visual_x.saturating_sub(tab.scroll_x),
+        inner.y + (tab.cursor_y as u16).saturating_sub(tab.scroll_y),
     ));
     if mode == 10 || mode == 11 {
         let prefix = if mode == 10 {
@@ -304,6 +434,6 @@ fn renderer(
             " File to Open: "
         };
         let cursor_col = prefix.chars().count() + the_command_line.chars().count();
-        frame.set_cursor_position((areas[1].x + cursor_col as u16, areas[1].y));
+        frame.set_cursor_position((areas[2].x + cursor_col as u16, areas[2].y));
     }
 }
