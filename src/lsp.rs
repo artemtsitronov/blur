@@ -95,6 +95,7 @@ pub struct Lsp {
     root_uri: String,
     docs: HashMap<PathBuf, (i64, String, String)>, // path, (version, language, text)
     diags: HashMap<PathBuf, Vec<Diag>>,
+    pub generation: u64,
     pub ready: bool,
     pub alive: bool,
 }
@@ -140,6 +141,7 @@ impl Lsp {
             diags: HashMap::new(),
             ready: false,
             alive: true,
+            generation: 0,
         };
         let uri = lsp.root_uri.clone();
         lsp.send(
@@ -279,6 +281,7 @@ impl Lsp {
                         })
                         .collect()
                 });
+                self.generation += 1;
                 self.diags.insert(path, list);
             }
             _ => {}

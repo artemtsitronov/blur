@@ -73,4 +73,8 @@ impl LspManager {
             None => &[],
         }
     }
+
+    pub fn generation(&self) -> u64 {
+        self.servers.values().map(|s| s.generation).sum()
+    }
 }

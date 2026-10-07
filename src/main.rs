@@ -72,7 +72,16 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
             }
         },
     }
+    let mut last_gen = 0;
     loop {
+        let g = lsp.generation();
+        if g != last_gen {
+            last_gen = g;
+            for t in tabs.iter_mut() {
+                t.highlight_cache = None;
+            }
+        }
+
         lsp.poll();
         sync_lsp(&mut lsp, &mut tabs[tab_selector]);
         let tab_names = &tabs
