@@ -1,8 +1,11 @@
 mod controls;
 mod helpers;
+mod lsp;
+mod lsp_manager;
 mod modes;
 
 use helpers::{Highlighter, Tab, fg_color};
+use lsp_manager::LspManager;
 use ratatui::layout::Alignment;
 use ratatui::style::*;
 use ratatui::text::*;
@@ -18,6 +21,8 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
     crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
     let args: Vec<String> = std::env::args().collect();
     let theme = opaline::load_by_name("catppuccin-mocha").unwrap();
+
+    let lsp = LspManager::default();
 
     let mut tab = Tab::new();
     let highlighter = Highlighter::new(&theme);

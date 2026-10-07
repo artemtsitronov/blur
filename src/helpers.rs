@@ -1,4 +1,11 @@
+use opaline::Theme;
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::Span,
+};
 use syntect::parsing::SyntaxSet;
+
+use crate::lsp::{self, Diag};
 
 fn wcag_contrast(l1: f64, l2: f64) -> f64 {
     let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
@@ -29,6 +36,7 @@ pub fn fg_color(bg: opaline::OpalineColor) -> ratatui::style::Color {
 pub struct Highlighter {
     syntax_set: syntect::parsing::SyntaxSet,
     syntect_theme: syntect::highlighting::Theme,
+    diag_colors: [Color; 4],
 }
 
 impl Highlighter {
@@ -38,10 +46,11 @@ impl Highlighter {
         Highlighter {
             syntax_set,
             syntect_theme,
+            diag_colors: diag_colors(theme),
         }
     }
 
-    pub fn highlight<'a>(&self, tab: &Tab) -> Vec<ratatui::text::Line<'a>> {
+    pub fn highlight<'a>(&self, tab: &Tab, diags: &[Diag]) -> Vec<ratatui::text::Line<'a>> {
         if tab.file_name.is_empty() {
             return tab
                 .input_box
@@ -64,7 +73,7 @@ impl Highlighter {
         let mut the_highlighter = syntect::easy::HighlightLines::new(syntax, &self.syntect_theme);
         let mut spans: Vec<ratatui::text::Line> = Vec::new();
 
-        for line in &tab.input_box {
+        for (i, line) in tab.input_box.iter().enumerate() {
             let range = the_highlighter
                 .highlight_line(line, &self.syntax_set)
                 .unwrap_or_default();
@@ -78,10 +87,92 @@ impl Highlighter {
                 );
                 spans_for_line.push(span);
             }
+            let marks = marks_for_row(i as u32, line, diags);
+            let spans_for_line = overlay(spans_for_line, &marks, &self.diag_colors);
             spans.push(ratatui::text::Line::from(spans_for_line));
         }
         return spans;
     }
+}
+
+fn diag_colors(theme: &Theme) -> [ratatui::style::Color; 4] {
+    [
+        theme.color("error").into(),
+        theme.color("warning").into(),
+        theme.color("info").into(),
+        theme.color("text.muted").into(),
+    ]
+}
+
+fn underline(sev: u8, colors: &[ratatui::style::Color; 4]) -> Style {
+    Style::default()
+        .add_modifier(Modifier::UNDERLINED)
+        .underline_color(colors[(sev.clamp(1, 4) - 1) as usize])
+}
+
+// aio lsp shtuff
+
+pub fn marks_for_row(row: u32, line: &str, diags: &[Diag]) -> Vec<(usize, usize, u8)> {
+    let mut marks = Vec::new();
+    for d in diags {
+        if row < d.start.0 || row > d.end.0 {
+            continue;
+        }
+        let s = if row == d.start.0 {
+            lsp::utf16_to_byte(line, d.start.1)
+        } else {
+            0
+        };
+        let mut e = if row == d.end.0 {
+            lsp::utf16_to_byte(line, d.end.1)
+        } else {
+            line.len()
+        };
+        if e <= s {
+            e = line[s..].chars().next().map_or(s, |c| s + c.len_utf8());
+        }
+        if e > s {
+            marks.push((s, e, d.severity));
+        }
+    }
+    marks
+}
+
+pub fn overlay(
+    spans: Vec<Span<'static>>,
+    marks: &[(usize, usize, u8)],
+    colors: &[Color; 4],
+) -> Vec<Span<'static>> {
+    if marks.is_empty() {
+        return spans;
+    }
+    let piece = |text: String, base: Style, sev: Option<u8>| match sev {
+        Some(s) => Span::styled(text, base.patch(underline(s, colors))),
+        None => Span::styled(text, base),
+    };
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    for span in spans {
+        let mut buf = String::new();
+        let mut cur: Option<u8> = None;
+        for ch in span.content.chars() {
+            let sev = marks
+                .iter()
+                .filter(|m| pos >= m.0 && pos < m.1)
+                .map(|m| m.2)
+                .min();
+            if sev != cur && !buf.is_empty() {
+                out.push(piece(std::mem::take(&mut buf), span.style, cur));
+            }
+            cur = sev;
+            buf.push(ch);
+            pos += ch.len_utf8();
+        }
+        if !buf.is_empty() {
+            out.push(piece(buf, span.style, cur));
+        }
+    }
+    out
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -96,6 +187,7 @@ pub struct Tab {
     pub scroll_y: u16,
     pub undo_stack: Vec<EditRecord>,
     pub redo_stack: Vec<EditRecord>,
+    pub lsp_dirty: bool,
 }
 
 impl Tab {
@@ -110,6 +202,7 @@ impl Tab {
             scroll_x: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            lsp_dirty: false,
         }
     }
 }
@@ -229,6 +322,7 @@ pub fn apply_forward(record: &EditRecord, input_box: &mut Vec<String>) -> (usize
     }
 }
 
+#[allow(dead_code)]
 pub fn log(msg: &str) {
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
