@@ -1,6 +1,6 @@
-# Blur — V0.9
+# Blur: V0.9
 
-A fast, modal, terminal-based text editor written in Rust — built on [`ratatui`](https://github.com/ratatui-org/ratatui) and [`crossterm`](https://github.com/crossterm-rs/crossterm), with Vim-inspired keybindings, syntax highlighting via `syntect`, and theming powered by `opaline`.
+A fast, modal, terminal-based text editor written in Rust: built on [`ratatui`](https://github.com/ratatui-org/ratatui) and [`crossterm`](https://github.com/crossterm-rs/crossterm), with Vim-inspired keybindings, syntax highlighting via `syntect`, and theming powered by `opaline`.
 
 > **Status:** early / actively developed. Keybindings and internals are still evolving.
 
@@ -34,15 +34,15 @@ A fast, modal, terminal-based text editor written in Rust — built on [`ratatui
 
 ## Features
 
-- **Modal editing** — Normal, Insert, Select (character-wise), and Select-Line modes, in the spirit of Vim.
-- **Multiple tabs** — open and switch between several files/buffers in one session.
-- **Syntax highlighting** — powered by `syntect`, themed through `opaline` (defaults to `catppuccin-mocha`).
-- **Undo / redo** — a dedicated edit-record stack tracks fine-grained operations (character inserts/deletes, line splits/merges, indentation, line moves, etc.) for reliable, reversible edits.
-- **Bracketed paste support** — multi-line pastes are inserted correctly in Insert mode.
-- **Prompt-driven save/open** — save to a new path or open another file without leaving the editor.
-- **Indentation controls** — indent/unindent single lines or whole selections.
-- **Unsaved-work protection** — warns before quitting a tab (or the app) with unsaved changes.
-- **Powerline-style status bar** — shows current mode, file name, save state, tab index, and cursor position.
+- **Modal editing**: Normal, Insert, Select (character-wise), and Select-Line modes, in the spirit of Vim.
+- **Multiple tabs**: open and switch between several files/buffers in one session.
+- **Syntax highlighting**: powered by `syntect`, themed through `opaline` (defaults to `catppuccin-mocha`).
+- **Undo / redo**: a dedicated edit-record stack tracks fine-grained operations (character inserts/deletes, line splits/merges, indentation, line moves, etc.) for reliable, reversible edits.
+- **Bracketed paste support**: multi-line pastes are inserted correctly in Insert mode.
+- **Prompt-driven save/open**: save to a new path or open another file without leaving the editor.
+- **Indentation controls**: indent/unindent single lines or whole selections.
+- **Unsaved-work protection**: warns before quitting a tab (or the app) with unsaved changes.
+- **Powerline-style status bar**: shows current mode, file name, save state, tab index, and cursor position.
 
 ## Installation
 
@@ -75,7 +75,7 @@ Open a specific file:
 $>./blur path/to/file.rs
 ```
 
-If the file doesn't exist yet, Blur will start with an empty buffer bound to that path — write with `w` to create it.
+If the file doesn't exist yet, Blur will start with an empty buffer bound to that path: write with `w` to create it.
 
 ## Modes
 
@@ -116,7 +116,7 @@ The default mode for navigation and commands.
 | `Backspace`    | Delete the character before the cursor                |
 | `q`            | Close the current tab / quit (prompts if unsaved)      |
 
-> **Note:** `w` is overloaded — it saves the file when pressed as a plain command in Normal mode. Use `W` if you always want to be prompted for a new path.
+> **Note:** `w` is overloaded: it saves the file when pressed as a plain command in Normal mode. Use `W` if you always want to be prompted for a new path.
 
 ### Insert Mode
 
@@ -192,7 +192,7 @@ Blur supports multiple open buffers ("tabs") in a single session:
 
 ## Undo / Redo
 
-Every meaningful edit — character insertions/deletions, string insert/removal (e.g. indentation), line splits/merges, line insertions/removals, and whole-line moves — is recorded as an `EditRecord`. `u` pops from the undo stack and applies the inverse operation; `r` pops from the redo stack and re-applies it. Performing a new edit clears the redo stack, matching standard editor semantics.
+Every meaningful edit: character insertions/deletions, string insert/removal (e.g. indentation), line splits/merges, line insertions/removals, and whole-line moves: is recorded as an `EditRecord`. `u` pops from the undo stack and applies the inverse operation; `r` pops from the redo stack and re-applies it. Performing a new edit clears the redo stack, matching standard editor semantics.
 
 ## Syntax Highlighting & Theming
 
@@ -216,17 +216,17 @@ src/
 ## Architecture Notes
 
 - **Event loop:** `main.rs` owns a `Vec<Tab>` plus a `mode: i32` state machine (`0` = Normal, `1` = Insert, `2` = Select, `3` = Select-Line, `10`/`11` = Save/Open prompts, `403` = unsaved-work prompt, `401`/`402` = error states). Each keypress is dispatched to the handler for the current mode.
-- **`Tab`** holds per-buffer state: `input_box` (the lines of text), cursor position, scroll offsets, save state, and independent undo/redo stacks — so undo history and viewport are per-tab.
+- **`Tab`** holds per-buffer state: `input_box` (the lines of text), cursor position, scroll offsets, save state, and independent undo/redo stacks: so undo history and viewport are per-tab.
 - **`Visual`** tracks the anchor point (`v_x`, `v_y`) for Select and Select-Line modes.
 - **`EditRecord`** is an enum of reversible operations; `apply_inverse` and `apply_forward` in `helpers.rs` are the single source of truth for how each operation is undone/redone, keeping edit logic and undo logic in sync.
-- **Rendering:** `renderer()` in `main.rs` lays out the buffer viewport and a two-segment status bar, auto-scrolls to keep the cursor in view (accounting for Unicode display width), and positions the terminal cursor precisely — including inside the save/open command line.
+- **Rendering:** `renderer()` in `main.rs` lays out the buffer viewport and a two-segment status bar, auto-scrolls to keep the cursor in view (accounting for Unicode display width), and positions the terminal cursor precisely: including inside the save/open command line.
 
 ## Known Limitations
 
 - Select mode (`v`) only supports selections within a single line.
 - Word-motion commands (`e`, `b`) are basic space-delimited jumps rather than full Vim word-object semantics.
 - No search/replace, no line numbers, no split panes yet.
-- Debug logging (`helpers::log`) writes to `blur-log.txt` in the working directory — remember to clean this up or gate it behind a debug flag before distributing builds.
+- Debug logging (`helpers::log`) writes to `blur-log.txt` in the working directory: remember to clean this up or gate it behind a debug flag before distributing builds.
 
 ## Roadmap
 
@@ -258,5 +258,3 @@ This project is dual-licensed under either of:
   
 ### Credits
 `Artem Tsitronov` [https://github.com/artemtsitronov]
-
-
