@@ -233,6 +233,7 @@ impl Tab {
     pub fn unsave(&mut self) {
         self.saved = false;
         self.highlight_cache = None;
+        self.lsp_dirty = true;
     }
 }
 

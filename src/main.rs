@@ -26,6 +26,10 @@ fn main() -> std::io::Result<()> {
 }
 
 fn sync_lsp(lsp: &mut LspManager, tab: &mut Tab) {
+    if !tab.lsp_dirty && tab.lsp_file == tab.file_name {
+        return;
+    }
+
     if tab.file_name.is_empty() {
         return;
     }
