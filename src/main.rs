@@ -1,5 +1,5 @@
 mod controls;
-mod helpers;
+    mod helpers;
 mod modes;
 mod normal_mode;
 mod select_modes;
@@ -250,7 +250,7 @@ fn renderer(
         403 => footer_text = format!("you have unsaved work, quit anyway? [y/n]"),
         _ => {
             footer_text =
-                "SOME ERRORS, try to relaunch the program                   BLUR V0.1".to_string();
+                "SOME ERRORS, try to relaunch the program                   BLUR 1.0".to_string();
         }
     }
 
@@ -334,7 +334,7 @@ fn renderer(
             Style::default().fg(theme.color("accent.primary").into()),
         ),
         Span::styled(
-            " Blur 0.9 ",
+            " Blur 1.0 ",
             Style::default()
                 .fg(fg_color(theme.color("accent.primary")))
                 .bg(theme.color("accent.primary").into())
