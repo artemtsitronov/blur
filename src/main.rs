@@ -287,7 +287,7 @@ fn renderer(
         403 => footer_text = format!("you have unsaved work, quit anyway? [y/n]"),
         _ => {
             footer_text =
-                "SOME ERRORS, try to relaunch the program                   BLUR V0.1".to_string();
+                "SOME ERRORS, try to relaunch the program                   BLUR 1.0".to_string();
         }
     }
 
