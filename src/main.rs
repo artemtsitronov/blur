@@ -10,11 +10,33 @@ use ratatui::layout::Alignment;
 use ratatui::style::*;
 use ratatui::text::*;
 use ratatui::*;
+use std::path::Path;
+use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
+
+use crate::lsp::Lsp;
 
 fn main() -> std::io::Result<()> {
     ratatui::run(app)?;
     Ok(())
+}
+
+fn sync_lsp(lsp: &mut LspManager, tab: &Tab, lsp_file: &mut String, last_sent: &mut Vec<String>) {
+    if tab.file_name.is_empty() {
+        return;
+    }
+    let path = Path::new(&tab.file_name);
+    if *lsp_file != tab.file_name {
+        if !path.exists() {
+            return; // new file
+        }
+        lsp.open(path, &tab.input_box.join("\n"));
+        *lsp_file = tab.file_name.clone();
+        *last_sent = tab.input_box.clone();
+    } else if *last_sent != tab.input_box {
+        lsp.change(path, &tab.input_box.join("\n"));
+        *last_sent = tab.input_box.clone();
+    }
 }
 
 fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
@@ -22,7 +44,9 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let theme = opaline::load_by_name("catppuccin-mocha").unwrap();
 
-    let lsp = LspManager::default();
+    let mut lsp = LspManager::default();
+    let mut lsp_file = String::new();
+    let mut last_sent: Vec<String> = Vec::new();
 
     let mut tab = Tab::new();
     let highlighter = Highlighter::new(&theme);
@@ -42,17 +66,24 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         },
     }
     loop {
+        lsp.poll();
+        sync_lsp(&mut lsp, &tab, &mut lsp_file, &mut last_sent);
+
         terminal.draw(|frame| {
             renderer(
                 frame,
                 &theme,
                 &mut tab,
                 &highlighter,
+                &lsp,
                 mode,
                 &mut the_command_line,
             )
         })?;
 
+        if !crossterm::event::poll(Duration::from_millis(200))? {
+            continue; // nothing was pressed :(
+        }
         let event = crossterm::event::read()?;
         let mut the_text = tab.input_box.clone();
         match &event {
@@ -126,6 +157,7 @@ fn renderer(
     theme: &opaline::Theme,
     tab: &mut Tab,
     highlighter: &Highlighter,
+    lsp: &LspManager,
     mode: i32,
     the_command_line: &str,
 ) {
@@ -242,9 +274,11 @@ fn renderer(
         ),
     ]);
 
-    let input =
-        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(highlighter.highlight(tab)))
-            .scroll((tab.scroll_y, tab.scroll_x));
+    let diags = lsp.diagnostics(Path::new(&tab.file_name));
+    let input = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(
+        highlighter.highlight(tab, diags),
+    ))
+    .scroll((tab.scroll_y, tab.scroll_x));
     frame.render_widget(input, areas[0]);
     frame.render_widget(
         ratatui::widgets::Paragraph::new(footer_left)
