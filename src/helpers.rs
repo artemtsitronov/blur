@@ -2,7 +2,7 @@ use crate::lsp::{self, Diag};
 use opaline::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
 };
 use syntect::parsing::SyntaxSet;
 
@@ -64,20 +64,12 @@ impl Highlighter {
             diag_colors: diag_colors(theme),
         }
     }
-    pub fn highlight<'a>(&self, tab: &mut Tab, diags: &[Diag]) -> Vec<ratatui::text::Line<'a>> {
-        if let Some(cached) = &tab.highlight_cache {
-            return cached.clone();
-        }
+    fn syntax_lines(&self, tab: &Tab) -> Vec<Line<'static>> {
         if tab.file_name.is_empty() {
             return tab
                 .input_box
                 .iter()
-                .map(|line| {
-                    ratatui::text::Line::from(ratatui::text::Span::styled(
-                        line.to_string(),
-                        ratatui::style::Style::default().fg(ratatui::style::Color::White),
-                    ))
-                })
+                .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(Color::White))))
                 .collect();
         }
         let syntax = self
@@ -86,30 +78,45 @@ impl Highlighter {
             .ok()
             .flatten()
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+        let mut h = syntect::easy::HighlightLines::new(syntax, &self.syntect_theme);
+        tab.input_box
+            .iter()
+            .map(|line| {
+                let spans: Vec<Span<'static>> = h
+                    .highlight_line(line, &self.syntax_set)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(st, text)| {
+                        Span::styled(
+                            text.trim_end_matches('\n').to_string(),
+                            Style::default().fg(Color::Rgb(
+                                st.foreground.r,
+                                st.foreground.g,
+                                st.foreground.b,
+                            )),
+                        )
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
+    }
 
-        let mut the_highlighter = syntect::easy::HighlightLines::new(syntax, &self.syntect_theme);
-        let mut spans: Vec<ratatui::text::Line> = Vec::new();
-
-        for (i, line) in tab.input_box.iter().enumerate() {
-            let range = the_highlighter
-                .highlight_line(line, &self.syntax_set)
-                .unwrap_or_default();
-            let mut spans_for_line: Vec<ratatui::text::Span> = Vec::new();
-            for (style, text) in range {
-                let fg = style.foreground;
-                let span = ratatui::text::Span::styled(
-                    text.trim_end_matches('\n').to_string(),
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Rgb(fg.r, fg.g, fg.b)),
-                );
-                spans_for_line.push(span);
-            }
-            let marks = marks_for_row(i as u32, line, diags);
-            let spans_for_line = overlay(spans_for_line, &marks, &self.diag_colors);
-            spans.push(ratatui::text::Line::from(spans_for_line));
+    pub fn highlight(&self, tab: &mut Tab, diags: &[Diag], height: usize) -> Vec<Line<'static>> {
+        if tab.highlight_cache.is_none() {
+            tab.highlight_cache = Some(self.syntax_lines(tab));
         }
-        tab.highlight_cache = Some(spans.clone());
-        return spans;
+        let base = tab.highlight_cache.as_ref().unwrap();
+        base.iter()
+            .enumerate()
+            .skip(tab.scroll_y as usize)
+            .take(height)
+            .map(|(i, line)| {
+                let text = tab.input_box.get(i).map_or("", |s| s.as_str());
+                let marks = marks_for_row(i as u32, text, diags);
+                Line::from(overlay(line.spans.clone(), &marks, &self.diag_colors))
+            })
+            .collect()
     }
 }
 
@@ -123,9 +130,11 @@ fn diag_colors(theme: &Theme) -> [ratatui::style::Color; 4] {
 }
 
 fn underline(sev: u8, colors: &[ratatui::style::Color; 4]) -> Style {
+    let c = colors[(sev.clamp(1, 4) - 1) as usize];
     Style::default()
+        .fg(c)
         .add_modifier(Modifier::UNDERLINED)
-        .underline_color(colors[(sev.clamp(1, 4) - 1) as usize])
+        .underline_color(c)
 }
 
 // aio lsp shtuff

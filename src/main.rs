@@ -26,25 +26,24 @@ fn main() -> std::io::Result<()> {
 }
 
 fn sync_lsp(lsp: &mut LspManager, tab: &mut Tab) {
-    if !tab.lsp_dirty && tab.lsp_file == tab.file_name {
-        return;
-    }
-
     if tab.file_name.is_empty() {
         return;
     }
+    if tab.lsp_file == tab.file_name && !tab.lsp_dirty {
+        return;
+    }
     let path = Path::new(&tab.file_name);
+    let text = tab.input_box.join("\n");
     if tab.lsp_file != tab.file_name {
         if !path.exists() {
-            return; // new, file
+            return;
         }
-        lsp.open(path, &tab.input_box.join("\n"));
+        lsp.open(path, &text);
         tab.lsp_file = tab.file_name.clone();
-        tab.lsp_sent = tab.input_box.clone().join("\n");
-    } else if tab.lsp_sent != tab.input_box.join("\n") {
-        lsp.change(path, &tab.input_box.join("\n"));
-        tab.lsp_sent = tab.input_box.clone().join("\n");
+    } else {
+        lsp.change(path, &text);
     }
+    tab.lsp_dirty = false;
 }
 
 fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
@@ -76,16 +75,7 @@ fn app(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
             }
         },
     }
-    let mut last_gen = 0;
     loop {
-        let g = lsp.generation();
-        if g != last_gen {
-            last_gen = g;
-            for t in tabs.iter_mut() {
-                t.highlight_cache = None;
-            }
-        }
-
         lsp.poll();
         sync_lsp(&mut lsp, &mut tabs[tab_selector]);
         let tab_names = &tabs
@@ -381,7 +371,7 @@ fn renderer(
             Style::default().fg(theme.color("accent.primary").into()),
         ),
         Span::styled(
-            " Blur 0.9 ",
+            " Blur 1.2 ",
             Style::default()
                 .fg(fg_color(theme.color("accent.primary")))
                 .bg(theme.color("accent.primary").into())
@@ -390,10 +380,12 @@ fn renderer(
     ]);
 
     let diags = lsp.diagnostics(Path::new(&tab.file_name));
-    let input = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(
-        highlighter.highlight(tab, diags),
-    ))
-    .scroll((tab.scroll_y, tab.scroll_x))
+    let input = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(highlighter.highlight(
+        tab,
+        diags,
+        inner.height as usize,
+    )))
+    .scroll((0, tab.scroll_x))
     .bg(theme.color("bg.base"));
 
     let tabs = ratatui::widgets::Tabs::new(tab_names.clone())
